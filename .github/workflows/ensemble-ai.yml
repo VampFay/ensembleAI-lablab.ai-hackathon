@@ -1,0 +1,34 @@
+name: Ensemble AI — SAST Scan
+
+# This workflow keeps the portfolio repository honest: it runs Semgrep against
+# the intentionally vulnerable mock applications and uploads the machine-readable
+# findings for inspection.
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  # Allow manual trigger
+  workflow_dispatch:
+
+jobs:
+  sast-scan:
+    name: Semgrep SAST Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Semgrep
+        run: pip install semgrep
+
+      - name: Run Semgrep on mock_app/
+        run: |
+          semgrep scan --config=auto --json mock_app/ > sast_results.json || true
+          cat sast_results.json | jq '.results | length' | xargs -I{} echo "Findings: {}"
+
+      - name: Upload SAST results
+        uses: actions/upload-artifact@v4
+        with:
+          name: sast-results
+          path: sast_results.json

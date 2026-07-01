@@ -1,0 +1,16 @@
+[project]
+name = "ensemble-ai"
+version = "0.1.0"
+description = "Autonomous DevSecOps swarm: adversarial vulnerability triage, patching, and compliance reporting via 5 Band-coordinated CrewAI agents."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "band-sdk[crewai]>=1.0.0",
+    "fastapi>=0.137.1",
+    "python-dotenv>=1.2.2",
+    "semgrep>=1.79.0",
+    "uvicorn>=0.49.0",
+    "websockets>=16.0",
+    "cryptography>=42.0.0",
+    "prometheus-client>=0.20.0",
+]

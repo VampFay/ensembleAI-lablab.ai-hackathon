@@ -1,0 +1,19 @@
+triage_agent:
+  agent_id: "<triage-agent-uuid-from-band>"
+  api_key: "<triage-agent-api-key-from-band>"
+
+red_team_agent:
+  agent_id: "<redteam-agent-uuid-from-band>"
+  api_key: "<redteam-agent-api-key-from-band>"
+
+developer_agent:
+  agent_id: "<developer-agent-uuid-from-band>"
+  api_key: "<developer-agent-api-key-from-band>"
+
+auditor_agent:
+  agent_id: "<auditor-agent-uuid-from-band>"
+  api_key: "<auditor-agent-api-key-from-band>"
+
+release_agent:
+  agent_id: "<release-agent-uuid-from-band>"
+  api_key: "<release-agent-api-key-from-band>"

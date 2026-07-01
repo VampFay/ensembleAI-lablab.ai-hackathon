@@ -1,0 +1,54 @@
+# Python-generated files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+build/
+wheels/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# Note: top-level `dist/` is gitignored (Python build output),
+# but frontend/dist/ IS committed (pre-built dashboard for zero-setup judges).
+dist/
+!frontend/dist/
+
+# Virtual environments and dependencies
+.venv/
+venv/
+ENV/
+node_modules/
+frontend/node_modules/
+
+# Local configuration & environment files
+.env
+.env.local
+.env.*.local
+agent_config.yaml
+
+# Project specific caches & logs
+scratch/state.db
+scratch/state.db-*
+scratch/agents.log
+scratch/server.log
+scratch/exploit_*
+terminal-logs/
+reports/*.md
+reports/*.sig
+waf_rules/*.conf
+!waf_rules/test_rule.conf
+.playwright-mcp/
+*.tmp
+*.zip
+
+# IDEs & System files
+.idea/
+.vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp
+.DS_Store
+Thumbs.db
