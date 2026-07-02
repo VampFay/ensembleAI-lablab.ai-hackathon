@@ -37,6 +37,14 @@ uv run python demo_replay.py --scenario bola
 
 The replay writes the same SQLite telemetry shape used by the live agents, so the dashboard exercises the real WebSocket server, timeline, logs, code diff, WAF artifact, and compliance-report path.
 
+By default, `demo_replay.py` auto-approves the release step so portfolio reviewers are never blocked by a second terminal or a browser click. To demonstrate the human approval gate, run:
+
+```bash
+uv run python demo_replay.py --scenario php --interactive-approval
+```
+
+Then click Approve or Reject in the dashboard before the approval timeout expires.
+
 ### Option B: Full Band Agent Swarm
 
 Use this path when you want the live hackathon workflow.
@@ -107,7 +115,8 @@ node scratch/regulated_node/poc_bola.js
 ├── run_agents.py                  # Live Band/CrewAI agent runner
 ├── ensemble_ai/
 │   ├── agents.py                  # Agent roles, prompts, and tool bindings
-│   ├── tools.py                   # Agent tools and telemetry updates
+│   ├── tools.py                   # Agent tools
+│   ├── workflow.py                # Shared telemetry, SAST ingestion, and approval transitions
 │   ├── db.py                      # SQLite state, logs, metrics, audit trail
 │   ├── crypto.py                  # Fernet encryption helpers
 │   └── cve_mapping.py             # CWE/CVSS enrichment helpers

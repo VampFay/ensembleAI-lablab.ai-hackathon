@@ -48,28 +48,69 @@ interface DiffLine {
   a: string | null;
 }
 
+interface NumberedDiffLine extends DiffLine {
+  bIdx: number | null;
+  aIdx: number | null;
+}
+
 function computeDiff(before: string, after: string): DiffLine[] {
   const beforeLines = before.split('\n');
   const afterLines  = after.split('\n');
-  const maxLen = Math.max(beforeLines.length, afterLines.length);
-  const lines: DiffLine[] = [];
-  
-  for (let i = 0; i < maxLen; i++) {
-    const b = beforeLines[i] ?? undefined;
-    const a = afterLines[i]  ?? undefined;
-    
-    if (b === a) {
-      lines.push({ type: 'unchanged', b: b ?? '', a: a ?? '' });
-    } else if (b !== undefined && a === undefined) {
-      lines.push({ type: 'removed', b, a: null });
-    } else if (b === undefined && a !== undefined) {
-      lines.push({ type: 'added', b: null, a });
-    } else {
-      lines.push({ type: 'removed', b: b!, a: null });
-      lines.push({ type: 'added',   b: null, a: a! });
+  const dp = Array.from({ length: beforeLines.length + 1 }, () =>
+    Array(afterLines.length + 1).fill(0) as number[]
+  );
+
+  for (let i = beforeLines.length - 1; i >= 0; i--) {
+    for (let j = afterLines.length - 1; j >= 0; j--) {
+      dp[i][j] = beforeLines[i] === afterLines[j]
+        ? dp[i + 1][j + 1] + 1
+        : Math.max(dp[i + 1][j], dp[i][j + 1]);
     }
   }
+
+  const lines: DiffLine[] = [];
+
+  let i = 0;
+  let j = 0;
+  while (i < beforeLines.length && j < afterLines.length) {
+    if (beforeLines[i] === afterLines[j]) {
+      lines.push({ type: 'unchanged', b: beforeLines[i], a: afterLines[j] });
+      i += 1;
+      j += 1;
+    } else if (dp[i + 1][j] >= dp[i][j + 1]) {
+      lines.push({ type: 'removed', b: beforeLines[i], a: null });
+      i += 1;
+    } else {
+      lines.push({ type: 'added', b: null, a: afterLines[j] });
+      j += 1;
+    }
+  }
+
+  while (i < beforeLines.length) {
+    lines.push({ type: 'removed', b: beforeLines[i], a: null });
+    i += 1;
+  }
+  while (j < afterLines.length) {
+    lines.push({ type: 'added', b: null, a: afterLines[j] });
+    j += 1;
+  }
+
   return lines;
+}
+
+function withLineNumbers(diffLines: DiffLine[]): NumberedDiffLine[] {
+  let bIdx = 1;
+  let aIdx = 1;
+
+  return diffLines.map((line) => {
+    if (line.type === 'unchanged') {
+      return { ...line, bIdx: bIdx++, aIdx: aIdx++ };
+    }
+    if (line.type === 'removed') {
+      return { ...line, bIdx: bIdx++, aIdx: null };
+    }
+    return { ...line, bIdx: null, aIdx: aIdx++ };
+  });
 }
 
 // Infer a human-readable language/stack label from the file path
@@ -118,6 +159,11 @@ export function RightPanelDiffViewer({
     if (isAwaiting) return [];
     return computeDiff(codeBefore, codeAfter);
   }, [codeBefore, codeAfter, isAwaiting]);
+
+  const numberedDiffLines = useMemo<NumberedDiffLine[]>(
+    () => withLineNumbers(diffLines),
+    [diffLines]
+  );
 
   const stackLabel = inferStackLabel(targetFile);
   const filePath   = targetFile || '---';
@@ -221,24 +267,16 @@ export function RightPanelDiffViewer({
         ) : (
           <div className={cn("relative z-0 p-4 pt-5", viewMode === 'split' ? "min-w-[800px]" : "min-w-full")}>
             {(() => {
-              let bIdx = 1;
-              let aIdx = 1;
-
               if (viewMode === 'inline') {
-                const inlineLines = diffLines.map((line) => {
-                  if (line.type === 'unchanged') return { ...line, bIdx: bIdx++, aIdx: aIdx++ };
-                  if (line.type === 'removed')   return { ...line, bIdx: bIdx++, aIdx: null };
-                  return { ...line, bIdx: null, aIdx: aIdx++ };
-                });
-                return inlineLines.map((line, idx) => (
+                return numberedDiffLines.map((line, idx) => (
                   <div key={idx} className="flex relative group leading-[1.6]">
                     <div className={cn("flex w-full relative transition-colors",
                       line.type === 'removed' ? 'bg-red-500/[0.06] shadow-[inset_2px_0_0_rgba(239,68,68,0.8)]' :
                       line.type === 'added'   ? 'bg-emerald-500/[0.06] shadow-[inset_2px_0_0_rgba(16,185,129,0.8)]' :
                       'hover:bg-[var(--color-border-panel)]/5'
                     )}>
-                      <div className="w-8 shrink-0 text-right pr-2 select-none opacity-40 text-[9px] border-r border-[var(--color-border-panel)]/5 mr-3 text-[var(--color-text-slate)]">{(line as any).bIdx || ''}</div>
-                      <div className="w-8 shrink-0 text-right pr-2 select-none opacity-40 text-[9px] border-r border-[var(--color-border-panel)]/5 mr-3 text-[var(--color-text-slate)]">{(line as any).aIdx || ''}</div>
+                      <div className="w-8 shrink-0 text-right pr-2 select-none opacity-40 text-[9px] border-r border-[var(--color-border-panel)]/5 mr-3 text-[var(--color-text-slate)]">{line.bIdx || ''}</div>
+                      <div className="w-8 shrink-0 text-right pr-2 select-none opacity-40 text-[9px] border-r border-[var(--color-border-panel)]/5 mr-3 text-[var(--color-text-slate)]">{line.aIdx || ''}</div>
                       <div className={cn("w-4 shrink-0 text-center select-none opacity-50",
                         line.type === 'removed' ? "text-[var(--color-diff-red)]" :
                         line.type === 'added'   ? "text-[var(--color-diff-green)]" : ""
@@ -252,16 +290,14 @@ export function RightPanelDiffViewer({
               }
 
               // Split view
-              return diffLines.map((line, idx) => {
-                const lineBIdx = (line.type === 'unchanged' || line.type === 'removed') ? bIdx++ : null;
-                const lineAIdx = (line.type === 'unchanged' || line.type === 'added')   ? aIdx++ : null;
+              return numberedDiffLines.map((line, idx) => {
                 return (
                   <div key={idx} className="grid grid-cols-2 relative group leading-[1.6]">
                     <div className={cn("py-0.5 border-r border-[var(--color-border-panel)]/5 flex w-full relative transition-colors",
                       line.type === 'removed' ? 'bg-red-500/[0.06] shadow-[inset_2px_0_0_rgba(239,68,68,0.8)]' : 'hover:bg-[var(--color-border-panel)]/5',
                       line.b === null ? 'opacity-10 pointer-events-none' : ''
                     )}>
-                      <div className="w-8 shrink-0 text-right pr-2 select-none opacity-40 text-[9px] border-r border-[var(--color-border-panel)]/5 mr-3 text-[var(--color-text-slate)] flex items-center justify-end">{lineBIdx || ''}</div>
+                      <div className="w-8 shrink-0 text-right pr-2 select-none opacity-40 text-[9px] border-r border-[var(--color-border-panel)]/5 mr-3 text-[var(--color-text-slate)] flex items-center justify-end">{line.bIdx || ''}</div>
                       <div className="w-4 shrink-0 text-center select-none opacity-50 text-[var(--color-diff-red)] flex items-center justify-center">{line.type === 'removed' ? '-' : ''}</div>
                       <div className={cn("flex-1 whitespace-pre", line.type === 'removed' ? 'text-[var(--color-text-slate)] font-medium' : 'text-[var(--color-text-slate)]')}>{syntaxHighlight(line.b || '')}</div>
                     </div>
@@ -269,7 +305,7 @@ export function RightPanelDiffViewer({
                       line.type === 'added' ? 'bg-emerald-500/[0.06] shadow-[inset_2px_0_0_rgba(16,185,129,0.8)]' : 'hover:bg-[var(--color-border-panel)]/5',
                       line.a === null ? 'opacity-10 pointer-events-none' : ''
                     )}>
-                      <div className="w-8 shrink-0 text-right pr-2 select-none opacity-40 text-[9px] border-r border-[var(--color-border-panel)]/5 mr-3 text-[var(--color-text-slate)] flex items-center justify-end">{lineAIdx || ''}</div>
+                      <div className="w-8 shrink-0 text-right pr-2 select-none opacity-40 text-[9px] border-r border-[var(--color-border-panel)]/5 mr-3 text-[var(--color-text-slate)] flex items-center justify-end">{line.aIdx || ''}</div>
                       <div className="w-4 shrink-0 text-center select-none opacity-50 text-[var(--color-diff-green)] flex items-center justify-center">{line.type === 'added' ? '+' : ''}</div>
                       <div className={cn("flex-1 whitespace-pre", line.type === 'added' ? 'text-[var(--color-text-slate)] font-medium' : 'text-[var(--color-text-slate)]')}>{syntaxHighlight(line.a || '')}</div>
                     </div>

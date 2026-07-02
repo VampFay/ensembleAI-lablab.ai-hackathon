@@ -1,12 +1,10 @@
 import asyncio
 import hashlib
 import hmac
-import json
 import logging
 import os
 import resource
 import subprocess
-import urllib.request
 import uuid
 from datetime import datetime
 
@@ -14,90 +12,13 @@ from pydantic import BaseModel, Field
 
 import ensemble_ai.db as db
 from ensemble_ai.cve_mapping import enrich_finding
+from ensemble_ai.workflow import (
+    compute_confidence as _compute_confidence,
+    request_approval,
+    update_state,
+)
 
 logger = logging.getLogger(__name__)
-
-
-# ---------------------------------------------------------------------------
-# SIEM forwarding (syslog — stdlib, no deps) + Slack alerting (1 HTTP call)
-# ---------------------------------------------------------------------------
-
-def _forward_to_siem(agent: str, msg: str, status: str):
-    """Forward critical events to SIEM via syslog (RFC 5424). No-op if not configured."""
-    siem_host = os.environ.get("SIEM_HOST")
-    if not siem_host:
-        return  # SIEM not configured — skip silently
-    try:
-        import logging.handlers
-        siem_logger = logging.getLogger("ensemble_ai.siem")
-        if not siem_logger.handlers:
-            handler = logging.handlers.SysLogHandler(address=(siem_host, int(os.environ.get("SIEM_PORT", 514))))
-            siem_logger.addHandler(handler)
-            siem_logger.setLevel(logging.INFO)
-        siem_logger.info(f"ensemble-ai agent={agent} status={status} msg={msg[:200]}")
-    except Exception as e:
-        logger.debug(f"SIEM forward failed: {e}")
-
-
-def _send_slack_alert(msg: str):
-    """Send a critical alert to Slack via webhook URL from env. No-op if not configured."""
-    webhook = os.environ.get("SLACK_WEBHOOK_URL")
-    if not webhook:
-        return  # Slack not configured — skip silently
-    try:
-        data = json.dumps({"text": f"🚨 Ensemble AI Alert: {msg}"}).encode()
-        req = urllib.request.Request(webhook, data=data, headers={"Content-Type": "application/json"})
-        urllib.request.urlopen(req, timeout=3)
-    except Exception as e:
-        logger.debug(f"Slack alert failed: {e}")
-
-def _compute_confidence(sast_clean: bool, exploit_verified: bool, patch_applied: bool) -> int:
-    """Compute a real confidence score from actual verification signals.
-
-    Base 50, +25 if SAST clean, +20 if exploit verified, +5 if patch applied.
-    Capped at 99, floored at 0. No more hardcoded 99%.
-    """
-    score = 50
-    if sast_clean:
-        score += 25
-    if exploit_verified:
-        score += 20
-    if patch_applied:
-        score += 5
-    return min(99, max(0, score))
-
-
-def update_state(
-    agent: str, msg: str, status: str = "INFO", step: int = None,
-    code_before: str = None, code_after: str = None, target_file: str = None,
-    exploit_status: str = None, patch_status: str = None,
-    confidence: int = None, signature_type: str = None,
-    root_cause: str = None, fix_applied: str = None, security_impact: str = None,
-    waf_rule_file: str = None, deploy_status: str = None
-):
-    """Writes structured telemetry data to the SQLite database and inserts a log entry."""
-    timestamp = datetime.now().strftime('%H:%M:%S')
-    db.update_system_state(
-        agent=agent, step=step,
-        code_before=code_before, code_after=code_after, target_file=target_file,
-        exploit_status=exploit_status, patch_status=patch_status,
-        confidence=confidence, signature_type=signature_type,
-        root_cause=root_cause, fix_applied=fix_applied, security_impact=security_impact,
-        waf_rule_file=waf_rule_file, deploy_status=deploy_status
-    )
-    db.insert_log(agent, msg, status, timestamp)
-
-    # Forward critical events to SIEM (syslog) + Slack (no-op if not configured)
-    if status in ("COMPROMISED", "SECURED", "ERROR"):
-        _forward_to_siem(agent, msg, status)
-    if status == "COMPROMISED":
-        _send_slack_alert(f"{agent}: {msg}")
-
-    # Track cycle start (Triage step 1) and completion (Release Manager step 6)
-    if step == 1 and agent == "TRIAGE":
-        db.record_cycle_start(signature_type or "Unknown")
-    elif step == 6 and agent == "RELEASE_MGR":
-        db.record_cycle_completion("success")
 
 
 # ---------------------------------------------------------------------------
@@ -656,24 +577,10 @@ async def request_human_approval_tool(input_data: RequestHumanApprovalInput) -> 
     """Pauses the workflow and waits for human sign-off via the dashboard /approve endpoint."""
     logger.info(f"[Tool: approval] Requesting human approval for {input_data.vuln_class}")
     try:
-        # Set the awaiting_approval flag in the DB — dashboard shows an "Approve" button
-        conn = db.get_db_connection()
-        conn.execute("UPDATE system_state SET awaiting_approval = 1, approved = 0 WHERE id = 1")
-        conn.commit()
-        conn.close()
-
-        db.log_audit("swarm", "approval_requested", details=f"Vuln: {input_data.vuln_class}, WAF: {input_data.waf_rule_file}")
-
-        update_state(
-            "RELEASE_MGR",
-            f"AWAITING HUMAN APPROVAL: {input_data.vuln_class} — {input_data.summary}",
-            "INFO",
-            step=6,
-            deploy_status="AWAITING_APPROVAL"
+        return request_approval(
+            vuln_class=input_data.vuln_class,
+            waf_rule_file=input_data.waf_rule_file,
+            summary=input_data.summary,
         )
-
-        return (f"Approval requested. The workflow is paused until a human reviews and approves "
-                f"via the dashboard. Vuln: {input_data.vuln_class}, WAF: {input_data.waf_rule_file}. "
-                f"Summary: {input_data.summary}")
     except Exception as e:
         return f"Error requesting approval: {e}"

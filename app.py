@@ -2,7 +2,6 @@ import os
 import asyncio
 import hmac
 import json
-import time
 from collections import defaultdict
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, HTTPException, Depends, Header
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse, PlainTextResponse
@@ -10,6 +9,7 @@ from fastapi.staticfiles import StaticFiles
 import uvicorn
 import ensemble_ai.db as db
 import ensemble_ai.crypto as crypto
+from ensemble_ai import workflow
 
 import logging
 
@@ -118,12 +118,7 @@ async def audit_log(limit: int = 50, auth=Depends(_check_admin_auth)):
 @app.post("/approve")
 async def approve(auth=Depends(_check_admin_auth)):
     """Human-in-the-loop: approve the pending WAF deployment."""
-    conn = db.get_db_connection()
-    conn.execute("UPDATE system_state SET awaiting_approval = 0, approved = 1, deploy_status = 'DEPLOYED' WHERE id = 1")
-    conn.commit()
-    conn.close()
-    db.invalidate_state_cache()  # OPT:3 — cache invalidated by update, but be explicit
-    db.log_audit("human", "approved_deployment", details="WAF deployment approved via dashboard")
+    workflow.approve_deployment(details="WAF deployment approved via dashboard")
     state_changed_event.set()
     return {"status": "approved"}
 
@@ -131,12 +126,7 @@ async def approve(auth=Depends(_check_admin_auth)):
 @app.post("/reject")
 async def reject(auth=Depends(_check_admin_auth)):
     """Human-in-the-loop: reject the pending WAF deployment."""
-    conn = db.get_db_connection()
-    conn.execute("UPDATE system_state SET awaiting_approval = 0, approved = 0, deploy_status = 'REJECTED' WHERE id = 1")
-    conn.commit()
-    conn.close()
-    db.invalidate_state_cache()
-    db.log_audit("human", "rejected_deployment", details="WAF deployment rejected via dashboard")
+    workflow.reject_deployment(details="WAF deployment rejected via dashboard")
     state_changed_event.set()
     return {"status": "rejected"}
 
@@ -147,42 +137,7 @@ async def trigger_sast(request: Request, auth=Depends(_check_admin_auth)):
     try:
         payload = await request.json()
         sast_report = payload.get("sast_report", {})
-        findings = sast_report.get("results", [])
-        
-        from ensemble_ai.cve_mapping import enrich_finding
-        from ensemble_ai.tools import update_state
-        
-        vulnerabilities_created = 0
-        for top in findings:
-            path = top.get("path", "")
-            # relative path normalization
-            if path.startswith("/app/"):
-                path = path[5:]
-            elif path.startswith("./"):
-                path = path[2:]
-                
-            check_id = top.get("check_id", "unknown-rule")
-            message = top.get("extra", {}).get("message", "Vulnerability detected")
-            
-            cwe_info = enrich_finding(check_id)
-            vuln_id = db.create_vulnerability(
-                target_file=path,
-                vuln_class=check_id,
-                cwe_id=cwe_info["cwe_id"],
-                cvss=cwe_info["cvss"]
-            )
-            vulnerabilities_created += 1
-            
-            # Start the swarm cycle in DB telemetry
-            update_state(
-                "TRIAGE",
-                f"CI/CD Ingestion: Found vulnerability in {path} — {message}",
-                "INFO",
-                step=1,
-                target_file=path,
-                signature_type=f"ZERO-DAY ({cwe_info['cwe_id']})"
-            )
-            
+        vulnerabilities_created = workflow.ingest_sast_report(sast_report)
         state_changed_event.set()
         return {"status": "triggered", "vulnerabilities_created": vulnerabilities_created}
     except Exception as e:

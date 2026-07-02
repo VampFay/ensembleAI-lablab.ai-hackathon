@@ -20,7 +20,12 @@ os.chdir(PROJECT_ROOT)
 
 import ensemble_ai.crypto as crypto  # noqa: E402
 import ensemble_ai.db as db  # noqa: E402
-from ensemble_ai.tools import update_state  # noqa: E402
+from ensemble_ai.workflow import (  # noqa: E402
+    approve_deployment,
+    get_approval_status,
+    request_approval,
+    update_state,
+)
 
 
 @dataclass(frozen=True)
@@ -215,7 +220,29 @@ def write_artifacts(scenario: ReplayScenario) -> None:
     )
 
 
-def replay(scenario_key: str, delay: float) -> None:
+def wait_for_interactive_approval(timeout_seconds: float) -> bool:
+    """Wait for dashboard approval during manual demos."""
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        approved, deploy_status = get_approval_status()
+        if approved == 1 or deploy_status == "DEPLOYED":
+            print("[RELEASE_MGR] human_approval_granted. Proceeding to WAF deployment...")
+            return True
+        if deploy_status == "REJECTED":
+            print("[RELEASE_MGR] human_approval_rejected. Terminating replay.")
+            return False
+        time.sleep(0.5)
+
+    print(f"[RELEASE_MGR] approval_timeout after {timeout_seconds:.0f}s. Terminating replay.")
+    return False
+
+
+def replay(
+    scenario_key: str,
+    delay: float,
+    interactive_approval: bool = False,
+    approval_timeout: float = 120.0,
+) -> None:
     scenario = SCENARIOS[scenario_key]
     before = read_target(scenario.target_file)
     after = build_after_code(before, scenario_key)
@@ -268,17 +295,6 @@ def replay(scenario_key: str, delay: float) -> None:
         ),
         (
             "RELEASE_MGR",
-            "Requesting human sign-off on the WAF deployment",
-            "INFO",
-            {
-                "step": 6,
-                "waf_rule_file": scenario.waf_rule_file,
-                "deploy_status": "AWAITING_APPROVAL",
-                "confidence": 95,
-            },
-        ),
-        (
-            "RELEASE_MGR",
             f"Generated WAF rule and demo compliance report: {scenario.waf_rule_file}",
             "SECURED",
             {
@@ -291,29 +307,29 @@ def replay(scenario_key: str, delay: float) -> None:
     ]
 
     for agent, message, status, fields in steps:
+        if fields.get("deploy_status") == "DEPLOYED":
+            request_approval(
+                vuln_class=scenario.vulnerability_class,
+                waf_rule_file=scenario.waf_rule_file,
+                summary=scenario.security_impact,
+            )
+            print("[RELEASE_MGR] Requesting human sign-off on the WAF deployment")
+
+            if interactive_approval:
+                print("\n[INFO] Swarm paused. Awaiting human approval via the dashboard...")
+                if not wait_for_interactive_approval(approval_timeout):
+                    return
+            else:
+                approve_deployment(
+                    actor="demo_replay",
+                    details="Auto-approved deterministic replay for credential-free portfolio demo",
+                )
+                print("[RELEASE_MGR] Auto-approved deterministic replay deployment")
+
         update_state(agent, message, status, **fields)
         print(f"[{agent}] {message}")
-        
-        if fields.get("deploy_status") == "AWAITING_APPROVAL":
-            print("\n[INFO] Swarm paused. Awaiting human approval via the dashboard...")
-            # update db explicitly
-            conn = db.get_db_connection()
-            conn.execute("UPDATE system_state SET awaiting_approval = 1, approved = 0 WHERE id = 1")
-            conn.commit()
-            conn.close()
-            
-            while True:
-                time.sleep(0.5)
-                conn = db.get_db_connection()
-                row = conn.execute("SELECT approved, deploy_status FROM system_state WHERE id = 1").fetchone()
-                conn.close()
-                if row and (row[0] == 1 or row[1] == 'DEPLOYED'):
-                    print("[RELEASE_MGR] human_approval_granted. Proceeding to WAF deployment...")
-                    break
-                elif row and row[1] == 'REJECTED':
-                    print("[RELEASE_MGR] human_approval_rejected. Terminating replay.")
-                    return
-        elif delay:
+
+        if delay:
             time.sleep(delay)
 
     write_artifacts(scenario)
@@ -324,8 +340,19 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Replay the Ensemble AI dashboard workflow.")
     parser.add_argument("--scenario", choices=sorted(SCENARIOS), default="php")
     parser.add_argument("--delay", type=float, default=0.8, help="Seconds between timeline steps.")
+    parser.add_argument(
+        "--interactive-approval",
+        action="store_true",
+        help="Pause at the approval gate until /approve or /reject is clicked in the dashboard.",
+    )
+    parser.add_argument(
+        "--approval-timeout",
+        type=float,
+        default=120.0,
+        help="Seconds to wait for dashboard approval when --interactive-approval is set.",
+    )
     args = parser.parse_args()
-    replay(args.scenario, args.delay)
+    replay(args.scenario, args.delay, args.interactive_approval, args.approval_timeout)
 
 
 if __name__ == "__main__":

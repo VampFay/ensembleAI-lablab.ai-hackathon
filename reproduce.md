@@ -41,6 +41,14 @@ uv run python demo_replay.py --scenario bola
 
 Open `http://localhost:8501`. The replay writes the same SQLite telemetry shape that the live agents write, so the React dashboard, WebSocket updates, code diff, timeline, WAF output, and compliance report path can be inspected without external services.
 
+The default replay auto-approves the final release transition so reviewers can run it end to end without dashboard interaction. To verify the human-in-the-loop control, run:
+
+```bash
+uv run python demo_replay.py --scenario php --interactive-approval
+```
+
+Then approve or reject the pending deployment in the dashboard.
+
 ## 3. Local Vulnerability PoCs
 
 To demonstrate that the Ensemble AI swarm is language and framework agnostic, we have provided three distinct enterprise vulnerability scenarios.
