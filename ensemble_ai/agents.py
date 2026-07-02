@@ -1,4 +1,7 @@
 import os
+from dataclasses import dataclass
+from typing import List, Any
+
 from ensemble_ai.tools import (
     ReadFileInput, read_file_tool,
     SearchCodeInput, search_code_tool,
@@ -11,7 +14,17 @@ from ensemble_ai.tools import (
     RequestHumanApprovalInput, request_human_approval_tool
 )
 
-def get_agent_configs():
+@dataclass
+class AgentConfig:
+    name: str
+    role: str
+    goal: str
+    backstory: str
+    custom_instructions: str
+    tools: List[Any]
+    model: str
+
+def get_agent_configs() -> List[AgentConfig]:
     """Returns the configuration, role, goal, backstory, and tools for each of the 5 agents."""
     
     # 1. Triage Agent
@@ -117,9 +130,9 @@ def get_agent_configs():
     ]
 
     return [
-        ("triage_agent", triage_role, triage_goal, triage_backstory, triage_custom, triage_tools, os.getenv("TRIAGE_AGENT_MODEL", "gemini/gemini-2.5-flash-lite")),
-        ("red_team_agent", red_role, red_goal, red_backstory, red_custom, red_tools, os.getenv("REDTEAM_AGENT_MODEL", "gemini/gemini-2.5-flash-lite")),
-        ("developer_agent", dev_role, dev_goal, dev_backstory, dev_custom, dev_tools, os.getenv("DEVELOPER_AGENT_MODEL", "gemini/gemini-2.5-flash-lite")),
-        ("auditor_agent", auditor_role, auditor_goal, auditor_backstory, auditor_custom, auditor_tools, os.getenv("AUDITOR_AGENT_MODEL", "gemini/gemini-2.5-flash-lite")),
-        ("release_agent", release_role, release_goal, release_backstory, release_custom, release_tools, os.getenv("RELEASE_AGENT_MODEL", "gemini/gemini-2.5-flash-lite")),
+        AgentConfig("triage_agent", triage_role, triage_goal, triage_backstory, triage_custom, triage_tools, os.getenv("TRIAGE_AGENT_MODEL", "gemini/gemini-2.5-flash-lite")),
+        AgentConfig("red_team_agent", red_role, red_goal, red_backstory, red_custom, red_tools, os.getenv("REDTEAM_AGENT_MODEL", "gemini/gemini-2.5-flash-lite")),
+        AgentConfig("developer_agent", dev_role, dev_goal, dev_backstory, dev_custom, dev_tools, os.getenv("DEVELOPER_AGENT_MODEL", "gemini/gemini-2.5-flash-lite")),
+        AgentConfig("auditor_agent", auditor_role, auditor_goal, auditor_backstory, auditor_custom, auditor_tools, os.getenv("AUDITOR_AGENT_MODEL", "gemini/gemini-2.5-flash-lite")),
+        AgentConfig("release_agent", release_role, release_goal, release_backstory, release_custom, release_tools, os.getenv("RELEASE_AGENT_MODEL", "gemini/gemini-2.5-flash-lite")),
     ]

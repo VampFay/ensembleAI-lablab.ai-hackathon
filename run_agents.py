@@ -122,10 +122,10 @@ async def main():
     agent_configs = get_agent_configs()
     tasks = []
     
-    for config_name, role, goal, backstory, custom_section, tools, model in agent_configs:
+    for config in agent_configs:
         tasks.append(
             asyncio.create_task(
-                start_agent(config_name, role, goal, backstory, custom_section, ws_url, rest_url, tools, model)
+                start_agent(config.name, config.role, config.goal, config.backstory, config.custom_instructions, ws_url, rest_url, config.tools, config.model)
             )
         )
     

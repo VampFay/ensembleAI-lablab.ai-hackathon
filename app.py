@@ -4,7 +4,7 @@ import hmac
 import json
 import time
 from collections import defaultdict
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, HTTPException, Depends, Header
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 import uvicorn
@@ -12,6 +12,8 @@ import ensemble_ai.db as db
 import ensemble_ai.crypto as crypto
 
 import logging
+
+state_changed_event = asyncio.Event()
 
 logging.basicConfig(
     level=logging.INFO,
@@ -90,69 +92,58 @@ async def get_dashboard():
     return HTMLResponse("<h1>Ensemble AI — Frontend not built. Run ./start.sh first.</h1>", status_code=503)
 
 
-def _check_admin_auth(request: Request) -> bool:
+def _check_admin_auth(x_api_key: str = Header(default="", alias="X-API-Key")):
     """vuln:1 fix — require X-API-Key header on admin endpoints (approve/reject).
     Key is set via ENSEMBLE_ADMIN_API_KEY env var. If not set, auth is disabled (dev mode).
     Uses hmac.compare_digest to prevent timing attacks."""
     expected = os.environ.get("ENSEMBLE_ADMIN_API_KEY")
-    if not expected:
-        return True  # dev mode — no key configured, allow all
-    provided = request.headers.get("X-API-Key", "")
-    # Constant-time comparison to prevent timing side-channels
-    return hmac.compare_digest(provided, expected)
+    if expected and not hmac.compare_digest(x_api_key, expected):
+        raise HTTPException(status_code=401, detail="unauthorized")
 
 
 @app.get("/api/vulns")
-async def list_vulns(request: Request):
+async def list_vulns(auth=Depends(_check_admin_auth)):
     """List all tracked vulnerabilities (multi-vuln support).
     new-vuln:1 fix — requires admin auth (same as /approve)."""
-    if not _check_admin_auth(request):
-        return JSONResponse({"error": "unauthorized"}, status_code=401)
     return JSONResponse(db.list_vulnerabilities())
 
 
 @app.get("/api/audit_log")
-async def audit_log(request: Request, limit: int = 50):
+async def audit_log(limit: int = 50, auth=Depends(_check_admin_auth)):
     """Return recent human actions from the audit log (SOC2 compliance).
     new-vuln:1 fix — requires admin auth."""
-    if not _check_admin_auth(request):
-        return JSONResponse({"error": "unauthorized"}, status_code=401)
     return JSONResponse(db.get_audit_log(limit))
 
 
 @app.post("/approve")
-async def approve(request: Request):
+async def approve(auth=Depends(_check_admin_auth)):
     """Human-in-the-loop: approve the pending WAF deployment."""
-    if not _check_admin_auth(request):
-        return JSONResponse({"error": "unauthorized"}, status_code=401)
     conn = db.get_db_connection()
     conn.execute("UPDATE system_state SET awaiting_approval = 0, approved = 1, deploy_status = 'DEPLOYED' WHERE id = 1")
     conn.commit()
     conn.close()
     db.invalidate_state_cache()  # OPT:3 — cache invalidated by update, but be explicit
     db.log_audit("human", "approved_deployment", details="WAF deployment approved via dashboard")
+    state_changed_event.set()
     return {"status": "approved"}
 
 
 @app.post("/reject")
-async def reject(request: Request):
+async def reject(auth=Depends(_check_admin_auth)):
     """Human-in-the-loop: reject the pending WAF deployment."""
-    if not _check_admin_auth(request):
-        return JSONResponse({"error": "unauthorized"}, status_code=401)
     conn = db.get_db_connection()
     conn.execute("UPDATE system_state SET awaiting_approval = 0, approved = 0, deploy_status = 'REJECTED' WHERE id = 1")
     conn.commit()
     conn.close()
     db.invalidate_state_cache()
     db.log_audit("human", "rejected_deployment", details="WAF deployment rejected via dashboard")
+    state_changed_event.set()
     return {"status": "rejected"}
 
 
 @app.post("/api/trigger")
-async def trigger_sast(request: Request):
+async def trigger_sast(request: Request, auth=Depends(_check_admin_auth)):
     """Receive SAST report from CI/CD pipeline and register findings."""
-    if not _check_admin_auth(request):
-        return JSONResponse({"error": "unauthorized"}, status_code=401)
     try:
         payload = await request.json()
         sast_report = payload.get("sast_report", {})
@@ -192,6 +183,7 @@ async def trigger_sast(request: Request):
                 signature_type=f"ZERO-DAY ({cwe_info['cwe_id']})"
             )
             
+        state_changed_event.set()
         return {"status": "triggered", "vulnerabilities_created": vulnerabilities_created}
     except Exception as e:
         logger.error(f"Failed to process trigger: {e}")
@@ -227,15 +219,25 @@ async def websocket_endpoint(websocket: WebSocket):
     # OPT:4 — only send state when it changes (hash comparison)
     last_hash = None
     try:
+        # Initial push
+        state = db.get_full_state()
+        if state:
+            last_hash = hash(json.dumps(state, sort_keys=True, default=str))
+            await websocket.send_json(state)
+
         while True:
+            try:
+                await asyncio.wait_for(state_changed_event.wait(), timeout=1.0)
+                state_changed_event.clear()
+            except asyncio.TimeoutError:
+                pass
+
             state = db.get_full_state()
             if state:
-                # Hash the state to detect changes
                 state_hash = hash(json.dumps(state, sort_keys=True, default=str))
                 if state_hash != last_hash:
                     await websocket.send_json(state)
                     last_hash = state_hash
-            await asyncio.sleep(0.5)
     except WebSocketDisconnect:
         logger.info(f"[WS] C2 client disconnected ({client_ip})")
     finally:
