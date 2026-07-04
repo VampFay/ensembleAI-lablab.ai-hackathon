@@ -16,6 +16,8 @@ from ensemble_ai.workflow import (
     compute_confidence as _compute_confidence,
     request_approval,
     update_state,
+    _forward_to_siem,
+    _send_slack_alert,
 )
 
 logger = logging.getLogger(__name__)
